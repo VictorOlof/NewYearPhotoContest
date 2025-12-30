@@ -1,37 +1,58 @@
 // server.js
 const express = require("express");
 const path = require("path");
-const fs = require("fs");
 const cookieParser = require("cookie-parser");
 const multer = require("multer");
 const Database = require("better-sqlite3");
 const sharp = require("sharp");
+const { Storage } = require("@google-cloud/storage");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ====== Google Cloud Storage ======
+// You can also set env var GCS_BUCKET=photo-booth-bucket in Cloud Run.
+const BUCKET_NAME = process.env.GCS_BUCKET || "photo-booth-bucket";
+const storageClient = new Storage(); // Uses Cloud Run service account automatically
+const bucket = storageClient.bucket(BUCKET_NAME);
+
+// Public URL helper (works with "Uniform access + allUsers: Storage Object Viewer")
+function publicUrlFor(objectName) {
+  return `https://storage.googleapis.com/${BUCKET_NAME}/${encodeURIComponent(objectName).replace(/%2F/g, "/")}`;
+}
+
+// If you ever need to delete the GCS object from a stored URL
+function objectNameFromUrl(url) {
+  // Accept either:
+  // https://storage.googleapis.com/<bucket>/<object>
+  // https://storage.cloud.google.com/<bucket>/<object> (not recommended for public)
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    // storage.googleapis.com/<bucket>/<object...>
+    if (u.hostname === "storage.googleapis.com" && parts[0] === BUCKET_NAME) {
+      return parts.slice(1).join("/");
+    }
+    // If URL stored is already an object name, return it
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // ====== Basic config ======
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Cache static assets (helps a lot for /wall and ngrok)
+// Cache static assets
 app.use(
   "/public",
   express.static(path.join(__dirname, "public"), { maxAge: "7d", etag: true })
 );
-app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"), { maxAge: "7d", etag: true })
-);
 
-// Ensure folders exist
-const uploadsDir = path.join(__dirname, "uploads");
-const thumbsDir = path.join(uploadsDir, "thumbs");
-const displayDir = path.join(uploadsDir, "display");
-for (const dir of [uploadsDir, thumbsDir, displayDir]) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
+// NOTE: We DO NOT serve /uploads from disk anymore.
+// Images will be served directly from GCS public URLs.
 
 // ====== Admin + voting lock ======
 let VOTING_LOCKED = false;
@@ -57,7 +78,6 @@ function columnExists(table, column) {
   return cols.some((c) => c.name === column);
 }
 
-// If you had older DB schema, add columns if missing
 if (!columnExists("submissions", "thumbPath")) {
   db.exec(`ALTER TABLE submissions ADD COLUMN thumbPath TEXT;`);
 }
@@ -65,18 +85,9 @@ if (!columnExists("submissions", "displayPath")) {
   db.exec(`ALTER TABLE submissions ADD COLUMN displayPath TEXT;`);
 }
 
-// ====== Multer (no file size limit) ======
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const safeExt = (path.extname(file.originalname) || "").toLowerCase();
-    const base = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    cb(null, `${base}${safeExt}`);
-  },
-});
-
+// ====== Multer (memory, no file size limit in multer) ======
+// NOTE: Cloud Run has its own request size limits; extremely large uploads may fail upstream.
 function isLikelyImage(file) {
-  // Accept common image mimetypes; you can loosen this if you want
   return (
     file.mimetype.startsWith("image/") ||
     [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"].includes(
@@ -86,8 +97,7 @@ function isLikelyImage(file) {
 }
 
 const upload = multer({
-  storage,
-  // IMPORTANT: Do NOT set limits.fileSize, that’s what caused your earlier error.
+  storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
     if (!isLikelyImage(file)) return cb(new Error("Only image uploads are allowed."));
     cb(null, true);
@@ -124,65 +134,45 @@ function setVoteState(res, state) {
   res.cookie("voteState", JSON.stringify(state), {
     httpOnly: true,
     sameSite: "lax",
-    maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+    maxAge: 1000 * 60 * 60 * 24 * 30,
   });
 }
 
+// If old code expects "/uploads/..", keep compatibility:
+// - If it's already a full URL (http/https), return it as-is.
+// - Otherwise prefix with "/" for your local routes (not used anymore).
 function relPath(p) {
-  // ensure "/uploads/..." format
+  if (!p) return p;
+  if (p.startsWith("http://") || p.startsWith("https://")) return p;
   return p.startsWith("/") ? p : `/${p}`;
 }
 
-// ====== Pages ======
-//app.get("/", (req, res) => res.redirect("/upload"));
+// Upload a buffer to GCS
+async function uploadBufferToGCS(objectName, buffer, contentType) {
+  const file = bucket.file(objectName);
+  await file.save(buffer, {
+    resumable: false,
+    contentType: contentType || "application/octet-stream",
+    // We rely on bucket-level public read IAM. No per-object ACL needed.
+    metadata: {
+      cacheControl: "public, max-age=604800", // 7 days
+    },
+  });
+  return publicUrlFor(objectName);
+}
 
+// ====== Pages ======
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "views", "submit.html")));
-
-// ====== Pages ======
-//app.get("/", (req, res) => res.redirect("/upload"));
-
-// Your upload page file is submit.html
-app.get("/upload", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "submit.html"))
-);
-
-app.get("/results", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "results.html"))
-);
-
-
-// Optional: keep /submit working too (nice for your own links)
-app.get("/submit", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "submit.html"))
-);
-
-app.get("/winner", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "winner.html"))
-);
-
-app.get("/gallery", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "gallery.html"))
-);
-
-app.get("/wall", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "wall.html"))
-);
-
-app.get("/slideshow", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "slideshow.html"))
-);
-
-app.get("/top3", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "top3.html"))
-);
-
-app.get("/admin", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "admin.html"))
-);
-
-app.get("/reveal", (req, res) =>
-  res.sendFile(path.join(__dirname, "views", "reveal.html"))
-);
+app.get("/upload", (req, res) => res.sendFile(path.join(__dirname, "views", "submit.html")));
+app.get("/results", (req, res) => res.sendFile(path.join(__dirname, "views", "results.html")));
+app.get("/submit", (req, res) => res.sendFile(path.join(__dirname, "views", "submit.html")));
+app.get("/winner", (req, res) => res.sendFile(path.join(__dirname, "views", "winner.html")));
+app.get("/gallery", (req, res) => res.sendFile(path.join(__dirname, "views", "gallery.html")));
+app.get("/wall", (req, res) => res.sendFile(path.join(__dirname, "views", "wall.html")));
+app.get("/slideshow", (req, res) => res.sendFile(path.join(__dirname, "views", "slideshow.html")));
+app.get("/top3", (req, res) => res.sendFile(path.join(__dirname, "views", "top3.html")));
+app.get("/admin", (req, res) => res.sendFile(path.join(__dirname, "views", "admin.html")));
+app.get("/reveal", (req, res) => res.sendFile(path.join(__dirname, "views", "reveal.html")));
 
 // ====== API: submissions list ======
 app.get("/api/submissions", (req, res) => {
@@ -206,73 +196,77 @@ app.get("/api/submissions", (req, res) => {
   );
 });
 
-// ====== API: upload ======
+// ====== API: upload (to GCS) ======
 app.post("/api/upload", upload.single("image"), async (req, res) => {
   try {
     const name = (req.body.name || "").trim();
-    if (!name) {
-      if (req.file) fs.unlink(req.file.path, () => {});
-      return res.status(400).send("Name is required");
-    }
+    if (!name) return res.status(400).send("Name is required");
     if (!req.file) return res.status(400).send("Image is required");
 
-    const originalRel = `/uploads/${req.file.filename}`;
-    const originalAbs = path.join(uploadsDir, req.file.filename);
+    // Create unique base name
+    const safeExt = (path.extname(req.file.originalname) || "").toLowerCase() || ".jpg";
+    const base = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    // Default: if sharp fails, we still save the submission with the original image
-    let displayRel = originalRel;
-    let thumbRel = originalRel;
+    // We'll store objects under these folders:
+    // originals/<base>.<ext>
+    // display/display-<base>.jpg
+    // thumbs/thumb-<base>.jpg
+    const originalObject = `originals/${base}${safeExt}`;
+    const displayObject = `display/display-${base}.jpg`;
+    const thumbObject = `thumbs/thumb-${base}.jpg`;
 
-    // Create resized versions (FAST over ngrok)
-    const base = path.parse(req.file.filename).name;
-    const displayName = `display-${base}.jpg`;
-    const thumbName = `thumb-${base}.jpg`;
+    // Upload original
+    const originalUrl = await uploadBufferToGCS(
+      originalObject,
+      req.file.buffer,
+      req.file.mimetype
+    );
 
-    const displayAbs = path.join(displayDir, displayName);
-    const thumbAbs = path.join(thumbsDir, thumbName);
+    // Generate resized versions using sharp (in-memory)
+    let displayUrl = originalUrl;
+    let thumbUrl = originalUrl;
 
     try {
-      await sharp(originalAbs)
+      const displayBuf = await sharp(req.file.buffer)
         .rotate()
         .resize({ width: 1600, withoutEnlargement: true })
         .jpeg({ quality: 80 })
-        .toFile(displayAbs);
+        .toBuffer();
 
-      await sharp(originalAbs)
+      const thumbBuf = await sharp(req.file.buffer)
         .rotate()
         .resize({ width: 600, withoutEnlargement: true })
         .jpeg({ quality: 70 })
-        .toFile(thumbAbs);
+        .toBuffer();
 
-      displayRel = `/uploads/display/${displayName}`;
-      thumbRel = `/uploads/thumbs/${thumbName}`;
+      displayUrl = await uploadBufferToGCS(displayObject, displayBuf, "image/jpeg");
+      thumbUrl = await uploadBufferToGCS(thumbObject, thumbBuf, "image/jpeg");
     } catch (e) {
-      console.error("sharp failed (using original image instead):", e.message);
-      // keep displayRel/thumbRel as originalRel
+      console.error("sharp failed (using original only):", e.message);
     }
 
-    const info = db.prepare(`
-      INSERT INTO submissions (name, imagePath, thumbPath, displayPath, votes, createdAt)
-      VALUES (?, ?, ?, ?, 0, datetime('now'))
-    `).run(name, originalRel, thumbRel, displayRel);
+    const info = db
+      .prepare(
+        `
+        INSERT INTO submissions (name, imagePath, thumbPath, displayPath, votes, createdAt)
+        VALUES (?, ?, ?, ?, 0, datetime('now'))
+      `
+      )
+      .run(name, originalUrl, thumbUrl, displayUrl);
 
-    const submissionId = info.lastInsertRowid;
-
+    // Prevent self-voting by storing their submission id
     res.cookie("mySubmissionId", String(info.lastInsertRowid), {
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 30
+      maxAge: 1000 * 60 * 60 * 24 * 30,
     });
 
     res.redirect("/gallery");
-
-
   } catch (err) {
     console.error("upload route failed:", err);
     res.status(500).send("Upload failed");
   }
 });
-
 
 // ====== API: voting ======
 app.post("/api/vote/:id", (req, res) => {
@@ -282,7 +276,7 @@ app.post("/api/vote/:id", (req, res) => {
 
   const id = String(req.params.id);
 
-  // ✅ Block self-voting (strong version)
+  // Block self-voting (strong version)
   const mySubmissionId = req.cookies.mySubmissionId;
   if (mySubmissionId && String(mySubmissionId) === String(id)) {
     return res.status(403).json({ error: "You can’t vote for your own picture" });
@@ -297,9 +291,7 @@ app.post("/api/vote/:id", (req, res) => {
     return res.status(403).json({ error: "You have already used all 3 votes" });
   }
   if (usedForImage >= 2) {
-    return res
-      .status(403)
-      .json({ error: "You can only vote 2 times for the same image" });
+    return res.status(403).json({ error: "You can only vote 2 times for the same image" });
   }
 
   const exists = db.prepare("SELECT id FROM submissions WHERE id = ?").get(id);
@@ -318,7 +310,6 @@ app.post("/api/vote/:id", (req, res) => {
   });
 });
 
-// Votes left on page load
 app.get("/api/votes-remaining", (req, res) => {
   const state = getVoteState(req);
   res.json({ votesRemaining: Math.max(0, 3 - (state.total || 0)) });
@@ -349,8 +340,7 @@ app.put("/api/admin/submissions/:id", (req, res) => {
   const name = (req.body.name || "").trim();
 
   if (!name) return res.status(400).json({ error: "Name is required" });
-  if (name.length > 50)
-    return res.status(400).json({ error: "Name too long (max 50)" });
+  if (name.length > 50) return res.status(400).json({ error: "Name too long (max 50)" });
 
   const info = db.prepare("UPDATE submissions SET name = ? WHERE id = ?").run(name, id);
   if (info.changes === 0) return res.status(404).json({ error: "Not found" });
@@ -358,7 +348,7 @@ app.put("/api/admin/submissions/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/admin/submissions/:id", (req, res) => {
+app.delete("/api/admin/submissions/:id", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   const id = Number(req.params.id);
@@ -371,11 +361,16 @@ app.delete("/api/admin/submissions/:id", (req, res) => {
 
   db.prepare("DELETE FROM submissions WHERE id = ?").run(id);
 
-  // Delete files from disk (ignore errors)
-  const paths = [row.imagePath, row.thumbPath, row.displayPath].filter(Boolean);
-  for (const p of paths) {
-    const abs = path.join(__dirname, p.replace(/^\//, ""));
-    fs.unlink(abs, () => {});
+  // Delete from GCS (best-effort)
+  const urls = [row.imagePath, row.thumbPath, row.displayPath].filter(Boolean);
+  for (const url of urls) {
+    const objectName = objectNameFromUrl(url);
+    if (!objectName) continue;
+    try {
+      await bucket.file(objectName).delete({ ignoreNotFound: true });
+    } catch (e) {
+      console.warn("Failed to delete object:", objectName, e.message);
+    }
   }
 
   res.json({ ok: true });
@@ -385,8 +380,7 @@ app.get("/api/me", (req, res) => {
   res.json({ mySubmissionId: req.cookies.mySubmissionId || null });
 });
 
-
-// ====== API: stats (for reveal page) ======
+// ====== API: stats ======
 app.get("/api/stats", (req, res) => {
   const ranked = db
     .prepare(
@@ -410,7 +404,6 @@ app.get("/api/stats", (req, res) => {
   const runnerUp = ranked[1] || null;
   const margin = winner && runnerUp ? (winner.votes || 0) - (runnerUp.votes || 0) : null;
 
-  // tightest adjacent gap
   let tightest = null;
   for (let i = 0; i < ranked.length - 1; i++) {
     const gap = (ranked[i].votes || 0) - (ranked[i + 1].votes || 0);
@@ -422,7 +415,6 @@ app.get("/api/stats", (req, res) => {
   const halfIndex = Math.floor(ranked.length / 2);
   const darkHorse = ranked.slice(halfIndex)[0] || null;
 
-  // late entry hero: among last 5 uploads (by createdAt)
   const latestFive = db
     .prepare(
       `
@@ -459,5 +451,5 @@ app.get("/api/stats", (req, res) => {
 
 // ====== Start server ======
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
