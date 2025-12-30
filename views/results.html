@@ -1,0 +1,208 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>📊 Honourable Mentions</title>
+
+  <link rel="stylesheet" href="/public/style.css" />
+
+  <style>
+    /* ---------- Global background (constant) ---------- */
+    body{
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 30% 20%, #2b2f6b 0%, #0b0d1a 55%, #05060d 100%);
+      overflow: hidden;
+    }
+
+    /* Subtle animated glow */
+    .bg-glow{
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 10% 20%, rgba(79,172,254,0.28), transparent 55%),
+        radial-gradient(circle at 85% 35%, rgba(255,215,0,0.18), transparent 50%),
+        radial-gradient(circle at 60% 90%, rgba(255,0,128,0.12), transparent 55%);
+      filter: blur(22px);
+      animation: slowDrift 14s ease-in-out infinite alternate;
+      opacity: 0.9;
+    }
+
+    @keyframes slowDrift{
+      from { transform: translate3d(-1%, -0.8%, 0) scale(1.05); }
+      to   { transform: translate3d( 1%,  0.8%, 0) scale(1.10); }
+    }
+
+    /* ---------- Content ---------- */
+    .container.wall{
+      max-width: 2000px;
+      margin: 20px auto;
+      padding: 22px;
+      position: relative;
+      z-index: 2;
+      background: rgba(0,0,0,0.38);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 22px 80px rgba(0,0,0,0.65);
+    }
+
+    .wallHeader{
+      display:flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .wallTitle{
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .wallTitle h1{
+      margin: 0;
+      font-size: 36px;
+      font-weight: 900;
+      letter-spacing: 0.4px;
+    }
+
+    .wallStatus{
+      font-weight: 800;
+      opacity: 0.9;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    /* ---------- BIG grid for TV ---------- */
+    .grid.wallGrid{
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 18px;
+      margin-top: 16px;
+    }
+
+    .card.wallCard{
+      border-radius: 20px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+    }
+
+    .card.wallCard img{
+      width: 100%;
+      height: 260px;
+      object-fit: cover;
+      display: block;
+    }
+
+    .meta.wallMeta{
+      padding: 14px 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .meta.wallMeta strong{
+      font-size: 18px;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .votesLine{
+      font-weight: 900;
+      font-size: 14px;
+      opacity: 0.85;
+      padding: 8px 10px;
+      border-radius: 999px;
+      display: inline-flex;
+      width: fit-content;
+      background: rgba(79,172,254,0.14);
+      border: 1px solid rgba(79,172,254,0.22);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <main class="container wall">
+    <div class="wallHeader">
+      <div class="wallTitle">
+        <h1>📊 Honourable Mentions</h1>
+        <div class="wallStatus" id="status">Loading…</div>
+      </div>
+    </div>
+
+    <div id="grid" class="grid wallGrid"></div>
+  </main>
+
+<script>
+const grid = document.getElementById("grid");
+const statusEl = document.getElementById("status");
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])
+  );
+}
+
+function nowTime(){
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+}
+
+// Remove top 3 positions INCLUDING ties for 3rd place.
+// Example: votes sorted: 10,9,8,8,8,7...
+// Top3 threshold is 8 -> remove all with votes >= 8.
+function removeTop3WithTies(sortedItems){
+  if (sortedItems.length <= 3) return [];
+
+  // votes at 1st, 2nd, 3rd positions (after sorting)
+  const thirdVotes = sortedItems[2]?.votes ?? 0;
+
+  // remove anything with votes >= thirdVotes (keeps "not top 3", including ties)
+  return sortedItems.filter(it => (it.votes ?? 0) < thirdVotes);
+}
+
+async function load(){
+  try{
+    const res = await fetch("/api/submissions", { cache: "no-store" });
+    const items = await res.json();
+
+    // Sort by votes desc, tie-break by id asc (stable)
+    items.sort((a,b) =>
+      (b.votes ?? 0) - (a.votes ?? 0) || (a.id ?? 0) - (b.id ?? 0)
+    );
+
+    const filtered = removeTop3WithTies(items);
+
+    statusEl.textContent =
+      `Showing ${filtered.length} (excluding Top 3) • Updated ${nowTime()}`;
+
+    grid.innerHTML = filtered.map(i => `
+      <div class="card wallCard">
+        <img src="${i.displayPath || i.imagePath}" alt="">
+        <div class="meta wallMeta">
+          <strong title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</strong>
+          <div class="votesLine">⭐ ${i.votes ?? 0} votes</div>
+        </div>
+      </div>
+    `).join("");
+
+  } catch {
+    statusEl.textContent = `⚠️ Connection issue • ${nowTime()}`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+# ===============================
+# Node.js
+# ===============================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===============================
+# Environment variables
+# ===============================
+.env
+.env.*
+!.env.example
+
+# ===============================
+# Local databases
+# ===============================
+*.sqlite
+*.sqlite3
+*.db
+
+# ===============================
+# Local uploads (dev only)
+# ===============================
+uploads/
+tmp/
+
+# ===============================
+# Build / runtime artifacts
+# ===============================
+dist/
+build/
+coverage/
+
+# ===============================
+# OS / Editor junk
+# ===============================
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# IntelliJ / WebStorm
+.idea/
+
+# ===============================
+# Logs
+# ===============================
+logs/
+*.log
+
+# ===============================
+# Google Cloud
+# ===============================
+*.key.json
+*.pem
+
+# ===============================
+# Optional: cache files
+# ===============================
+.cache/
+eval "$(ssh-agent -s)"
+.gitignore
+Agent
+eval "$(ssh-agent -s)".pub

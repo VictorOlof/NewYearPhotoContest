@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin</title>
+  <link rel="stylesheet" href="/public/style.css" />
+  <style>
+    .row { display:flex; gap:10px; flex-wrap: wrap; align-items: center; }
+    .adminInput { padding: 10px; border: 1px solid #ddd; border-radius: 10px; }
+    .danger { background: #ffe8e8; border: 1px solid #ffb3b3; }
+    .small { font-size: 13px; opacity: 0.75; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>Admin</h1>
+    <p><a href="/gallery">← Back to gallery</a></p>
+
+    <div class="row" style="margin: 12px 0 18px;">
+      <label style="margin:0;">Admin key:</label>
+      <input id="key" class="adminInput" placeholder="e.g. newyear" />
+      <button id="saveKey">Save key</button>
+      <button id="reload">Reload</button>
+    </div>
+    <div class="small">
+      Tip: this key is stored in your browser only. Guests won’t have it unless you share it.
+    </div>
+
+    <div id="grid" class="grid" style="margin-top: 18px;"></div>
+    <p id="msg"></p>
+  </main>
+
+<script>
+const grid = document.getElementById("grid");
+const msg = document.getElementById("msg");
+const keyInput = document.getElementById("key");
+
+keyInput.value = localStorage.getItem("adminKey") || "";
+
+document.getElementById("saveKey").addEventListener("click", () => {
+  localStorage.setItem("adminKey", keyInput.value.trim());
+  msg.textContent = "Saved admin key.";
+});
+
+document.getElementById("reload").addEventListener("click", load);
+
+function getKey() {
+  return (localStorage.getItem("adminKey") || "").trim();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function load() {
+  msg.textContent = "";
+  const res = await fetch("/api/submissions");
+  const items = await res.json();
+
+  grid.innerHTML = items.map(i => `
+    <div class="card" data-id="${i.id}">
+      <img src="${i.imagePath}" alt="">
+      <div class="meta">
+        <div class="row">
+          <input class="adminInput nameInput" value="${escapeHtml(i.name)}" maxlength="50" />
+          <button class="saveBtn">Save</button>
+          <button class="deleteBtn danger">Delete</button>
+        </div>
+        <div class="votes">Votes: <span>${i.votes}</span></div>
+      </div>
+    </div>
+  `).join("");
+
+  wireUp();
+}
+
+function wireUp() {
+  document.querySelectorAll(".saveBtn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".card");
+      const id = card.getAttribute("data-id");
+      const name = card.querySelector(".nameInput").value.trim();
+      const key = getKey();
+
+      if (!key) return alert("Enter admin key first.");
+
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/admin/submissions/${id}?key=${encodeURIComponent(key)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (!res.ok) return alert(data.error || "Failed to save");
+
+        msg.textContent = "Saved ✅";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll(".deleteBtn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".card");
+      const id = card.getAttribute("data-id");
+      const key = getKey();
+
+      if (!key) return alert("Enter admin key first.");
+      if (!confirm("Delete this picture permanently?")) return;
+
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/admin/submissions/${id}?key=${encodeURIComponent(key)}`, {
+          method: "DELETE"
+        });
+        const data = await res.json();
+        if (!res.ok) return alert(data.error || "Failed to delete");
+
+        card.remove();
+        msg.textContent = "Deleted ✅";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+load();
+</script>
+</body>
+</html>

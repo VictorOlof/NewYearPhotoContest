@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>2nd & 3rd</title>
+  <link rel="stylesheet" href="/public/style.css" />
+  <style>
+    /* Fullscreen image viewer */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.92);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      cursor: zoom-out;
+    }
+
+    .lightbox img {
+      max-width: 95vw;
+      max-height: 95vh;
+      object-fit: contain;
+      border-radius: 18px;
+      box-shadow: 0 30px 100px rgba(0,0,0,0.8);
+    }
+
+    .place {
+      display: inline-block;
+      font-weight: 800;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #ddd;
+      background: #f2f2f2;
+      width: fit-content;
+    }
+
+    /* Tap-to-reveal info */
+    .revealInfo {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      display: none;
+      text-align: center;
+    }
+
+    .revealCard.revealed .revealInfo {
+      display: block;
+    }
+
+    .revealPlace {
+      font-size: 18px;
+      font-weight: 900;
+      margin-bottom: 4px;
+    }
+
+    .revealVotes {
+      font-size: 16px;
+      font-weight: 800;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <h1>2nd & 3rd Winners 🥈🥉</h1>
+
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <div id="lightbox" class="lightbox" onclick="closeLightbox()">
+    <img id="lightboxImg" />
+  </div>
+
+<script>
+function toggleReveal(card) {
+  card.classList.toggle("revealed");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])
+  );
+}
+
+function placeText(place) {
+  if (place === 2) return "2nd place";
+  if (place === 3) return "3rd place";
+  return "";
+}
+
+function openLightbox(e, src) {
+  e.stopPropagation(); // prevents reveal toggle
+  const lb = document.getElementById("lightbox");
+  const img = document.getElementById("lightboxImg");
+  img.src = src;
+  lb.style.display = "flex";
+}
+
+function closeLightbox() {
+  const lb = document.getElementById("lightbox");
+  const img = document.getElementById("lightboxImg");
+  lb.style.display = "none";
+  img.src = "";
+}
+
+async function loadSecondAndThirdWithTies() {
+  const res = await fetch("/api/submissions");
+  const items = await res.json();
+
+  // Sort by votes DESC, stable fallback by id
+  items.sort((a, b) =>
+    (b.votes || 0) - (a.votes || 0) || (a.id || 0) - (b.id || 0)
+  );
+
+  let currentPlace = 0;
+  let lastVotes = null;
+  const rankedUpTo3 = [];
+
+  // Rank up to place 3 (so we can show 2nd + 3rd)
+  for (const item of items) {
+    if (lastVotes === null || item.votes < lastVotes) {
+      currentPlace++;
+    }
+    lastVotes = item.votes;
+
+    if (currentPlace > 3) break;
+
+    rankedUpTo3.push({
+      ...item,
+      place: currentPlace
+    });
+  }
+
+  // Remove 1st place, keep only 2nd and 3rd
+  const secondAndThird = rankedUpTo3.filter(x => x.place === 2 || x.place === 3);
+
+  const grid = document.getElementById("grid");
+  grid.innerHTML = secondAndThird.map(i => `
+    <div class="card revealCard" onclick="toggleReveal(this)">
+      <img
+        src="${i.displayPath || i.imagePath}"
+        alt=""
+        onclick="openLightbox(event, '${i.displayPath || i.imagePath}')"
+      />
+
+      <div class="meta">
+        <strong>${escapeHtml(i.name)}</strong>
+
+        <div class="revealInfo">
+          <div class="revealPlace">
+            ${placeText(i.place)}
+          </div>
+          <div class="revealVotes">
+            ${i.votes} votes
+          </div>
+        </div>
+      </div>
+    </div>
+  `).join("");
+}
+
+loadSecondAndThirdWithTies();
+</script>
+</body>
+</html>

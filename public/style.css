@@ -1,0 +1,185 @@
+/* ---------- Base ---------- */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top, #1b1f3b 0%, #0b0d1a 60%);
+  color: #f5f6fa;
+  min-height: 100vh;
+}
+
+/* ---------- Layout ---------- */
+.container {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 18px;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- Typography ---------- */
+h1 {
+  margin-top: 0;
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+}
+
+p {
+  opacity: 0.9;
+}
+
+a {
+  color: #9ad0ff;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Forms ---------- */
+label {
+  display: block;
+  margin-top: 14px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+input[type="text"],
+input[type="file"],
+input,
+.adminInput {
+  width: 100%;
+  padding: 12px 14px;
+  margin-top: 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  outline: none;
+}
+
+input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+input:focus {
+  border-color: #9ad0ff;
+}
+
+/* ---------- Buttons ---------- */
+button {
+  margin-top: 12px;
+  padding: 12px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(135deg, #4facfe, #00f2fe);
+  color: #0b0d1a;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 6px 20px rgba(79, 172, 254, 0.4);
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(79, 172, 254, 0.6);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+button.danger {
+  background: linear-gradient(135deg, #ff5f6d, #ffc371);
+  color: #2b0b0b;
+  box-shadow: 0 6px 20px rgba(255, 95, 109, 0.45);
+}
+
+/* ---------- Grid ---------- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 18px;
+  margin-top: 22px;
+}
+
+/* ---------- Cards ---------- */
+.card {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
+}
+
+.card img {
+  width: 100%;
+  height: 190px;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---------- Card content ---------- */
+.meta {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.meta strong {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.votes {
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+/* ---------- Place badge ---------- */
+.place {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  background: linear-gradient(135deg, #ffd700, #ffb347);
+  color: #2a1b00;
+  box-shadow: 0 4px 14px rgba(255, 215, 0, 0.5);
+}
+
+/* ---------- Admin helpers ---------- */
+.row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.small {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+#msg {
+  margin-top: 12px;
+  font-weight: 700;
+}

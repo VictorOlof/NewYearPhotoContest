@@ -1,0 +1,461 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>📺 Slideshow</title>
+
+  <link rel="stylesheet" href="/public/style.css" />
+
+  <style>
+    /* Same background as wall */
+    body{
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 30% 20%, #2b2f6b 0%, #0b0d1a 55%, #05060d 100%);
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    .bg-glow{
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 10% 20%, rgba(79,172,254,0.28), transparent 55%),
+        radial-gradient(circle at 85% 35%, rgba(255,215,0,0.18), transparent 50%),
+        radial-gradient(circle at 60% 90%, rgba(255,0,128,0.12), transparent 55%);
+      filter: blur(22px);
+      animation: slowDrift 14s ease-in-out infinite alternate;
+      opacity: 0.9;
+    }
+
+    @keyframes slowDrift{
+      from { transform: translate3d(-1%, -0.8%, 0) scale(1.05); }
+      to   { transform: translate3d( 1%,  0.8%, 0) scale(1.10); }
+    }
+
+    /* Fireworks canvas */
+    #fireworks{
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .container.show{
+      max-width: 2000px;
+      margin: 20px auto;
+      padding: 28px;
+      position: relative;
+      z-index: 2;
+      background: rgba(0,0,0,0.38);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 22px 80px rgba(0,0,0,0.65);
+      border-radius: 20px;
+    }
+
+    .header{
+      display:flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+
+    .header h1{
+      margin: 0;
+      font-size: 38px;
+      font-weight: 950;
+      letter-spacing: 0.5px;
+    }
+
+    .status{
+      font-weight: 800;
+      opacity: 0.9;
+      font-size: 16px;
+      white-space: nowrap;
+    }
+
+    /* Slideshow layout */
+    .slide{
+      display: grid;
+      grid-template-columns: 1.6fr 1fr;
+      gap: 26px;
+      align-items: center;
+      min-height: 72vh;
+    }
+
+    .imgWrap{
+      border-radius: 22px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      box-shadow: 0 20px 80px rgba(0,0,0,0.6);
+    }
+
+    .imgWrap img{
+      width: 100%;
+      height: 72vh;
+      object-fit: contain;
+      display: block;
+      background: rgba(0,0,0,0.25);
+    }
+
+    .text{
+      display: grid;
+      gap: 18px;
+    }
+
+    .badge{
+      font-size: 18px;
+      font-weight: 900;
+      padding: 10px 16px;
+      border-radius: 999px;
+      width: fit-content;
+      background: rgba(79,172,254,0.14);
+      border: 1px solid rgba(79,172,254,0.22);
+    }
+
+    .name{
+      font-size: 54px;
+      font-weight: 950;
+      line-height: 1.05;
+      word-break: break-word;
+    }
+
+    .hint{
+      margin-top: 12px;
+      font-size: 16px;
+      opacity: 0.75;
+      font-weight: 700;
+    }
+
+    /* Interrupt view (new upload spotlight) */
+    .interruptBadge{
+      background: rgba(255,215,0,0.18);
+      border: 1px solid rgba(255,215,0,0.35);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <canvas id="fireworks" aria-hidden="true"></canvas>
+
+  <main class="container show">
+    <div class="header">
+      <h1>📺 Slideshow</h1>
+      <div class="status" id="status">Loading…</div>
+    </div>
+
+    <div id="content"></div>
+  </main>
+
+<script>
+/* ================= Config ================= */
+const INTERVAL_MS = 7500;       // slideshow speed
+const WATCH_MS = 3000;          // how often to check for new uploads
+const INTERRUPT_MS = 7500;      // how long to show new upload, then go back to wall
+
+/* ================= Helpers ================= */
+const content = document.getElementById("content");
+const statusEl = document.getElementById("status");
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])
+  );
+}
+
+function nowTime(){
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+}
+
+/* ================= Slideshow state ================= */
+let items = [];
+let index = 0;
+
+let slideTimer = null;
+let watchTimer = null;
+
+let baselineMaxId = 0;       // max id at the time slideshow started
+let interrupting = false;
+
+/* ================= Rendering ================= */
+function renderSlide(item){
+  content.innerHTML = `
+    <div class="slide">
+      <div class="imgWrap">
+        <img src="${item.displayPath || item.imagePath}" alt="">
+      </div>
+      <div class="text">
+        <div class="badge">✨ Now showing</div>
+        <div class="name">${escapeHtml(item.name || "")}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmpty(){
+  content.innerHTML = `
+    <div class="text">
+      <div class="name">Waiting for photos…</div>
+      <div class="hint">Upload something and it will appear here.</div>
+    </div>
+  `;
+}
+
+/* ================= Logic ================= */
+function nextSlide(){
+  if (interrupting) return;
+  if (!items.length) return;
+
+  const nextIndex = index + 1;
+
+  // 🔁 If we completed one full loop → go back to wall
+  if (nextIndex >= items.length) {
+    window.location.href = "/wall";
+    return;
+  }
+
+  index = nextIndex;
+  renderSlide(items[index]);
+  statusEl.textContent = `Images: ${items.length} • Updated ${nowTime()}`;
+}
+
+
+function stopTimers(){
+  if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
+  if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+}
+
+async function fetchSubmissions(){
+  const res = await fetch("/api/submissions", { cache: "no-store" });
+  const data = await res.json();
+
+  // 🎲 Shuffle once (Fisher–Yates)
+  for (let i = data.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [data[i], data[j]] = [data[j], data[i]];
+  }
+
+  return data;
+}
+
+
+/* ================= Interrupt: new upload detected ================= */
+function showNewUploadAndReturnToWall(newItem){
+  interrupting = true;
+  stopTimers();
+
+  // fireworks behind
+  startFireworksBurst(INTERRUPT_MS);
+
+  // render the new upload big
+  content.innerHTML = `
+    <div class="slide">
+      <div class="imgWrap">
+        <img src="${newItem.displayPath || newItem.imagePath}" alt="">
+      </div>
+      <div class="text">
+        <div class="badge interruptBadge">🎇 New upload!</div>
+        <div class="name">${escapeHtml(newItem.name || "")}</div>
+      </div>
+    </div>
+  `;
+
+  statusEl.textContent = `New photo detected • ${nowTime()}`;
+
+  setTimeout(() => {
+    window.location.href = "/wall";
+  }, INTERRUPT_MS);
+}
+
+/* ================= Watch for new uploads ================= */
+async function checkForNewUploads(){
+  if (interrupting) return;
+
+  try {
+    const data = await fetchSubmissions();
+    if (!data.length) return;
+
+    // newest item by id
+    const newest = data.reduce((best, cur) => ((cur.id||0) > (best.id||0) ? cur : best), data[0]);
+    const newestId = newest.id || 0;
+
+    // If a new upload happened since slideshow started -> interrupt
+    if (newestId > baselineMaxId) {
+      showNewUploadAndReturnToWall(newest);
+    }
+  } catch {
+    // ignore transient errors; slideshow can continue
+  }
+}
+
+/* ================= Init ================= */
+(async function init(){
+  try{
+    items = await fetchSubmissions();
+
+    if (!items.length){
+      renderEmpty();
+      statusEl.textContent = `No images • ${nowTime()}`;
+      // still watch; when first image comes, we'll interrupt & return to wall (optional)
+      baselineMaxId = 0;
+    } else {
+      // baseline = max id at start
+      baselineMaxId = Math.max(...items.map(x => x.id || 0));
+
+      index = 0;
+      renderSlide(items[index]);
+      statusEl.textContent = `Images: ${items.length} • Updated ${nowTime()}`;
+    }
+
+    slideTimer = setInterval(nextSlide, INTERVAL_MS);
+    watchTimer = setInterval(checkForNewUploads, WATCH_MS);
+
+  } catch {
+    renderEmpty();
+    statusEl.textContent = `⚠️ Connection issue • ${nowTime()}`;
+  }
+})();
+</script>
+
+<script>
+/* ================= Fireworks (same as wall, burst-only) ================= */
+const canvas = document.getElementById("fireworks");
+const ctx = canvas.getContext("2d");
+
+let W = 0, H = 0;
+function resize(){
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+function rand(min, max){ return min + Math.random() * (max - min); }
+
+const rockets = [];
+const sparks = [];
+
+let fireworksUntil = 0;
+let animating = false;
+let rocketTimer = 0;
+
+function startFireworksBurst(ms){
+  fireworksUntil = Math.max(fireworksUntil, Date.now() + ms);
+  if (!animating){
+    animating = true;
+    requestAnimationFrame(tick);
+  }
+}
+
+function spawnRocket(){
+  const x = rand(W * 0.15, W * 0.85);
+  const y = H + 30;
+  const targetY = rand(H * 0.15, H * 0.45);
+  rockets.push({
+    x, y,
+    vx: rand(-0.9, 0.9),
+    vy: rand(-12, -16),
+    targetY,
+    life: 120
+  });
+}
+
+function explode(x, y){
+  const count = Math.floor(rand(80, 140));
+  for (let i = 0; i < count; i++){
+    const a = rand(0, Math.PI * 2);
+    const sp = rand(2, 10);
+    sparks.push({
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp,
+      g: rand(0.08, 0.14),
+      size: rand(1.6, 3.4),
+      life: Math.floor(rand(45, 90)),
+      drag: rand(0.965, 0.985)
+    });
+  }
+}
+
+function tick(){
+  const now = Date.now();
+  const active = now < fireworksUntil;
+
+  ctx.fillStyle = active ? "rgba(0,0,0,0.18)" : "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, W, H);
+
+  if (active){
+    rocketTimer--;
+    if (rocketTimer <= 0){
+      const burst = Math.random() < 0.35 ? 2 : 1;
+      for (let i = 0; i < burst; i++) spawnRocket();
+      rocketTimer = Math.floor(rand(14, 28));
+    }
+  }
+
+  for (let i = rockets.length - 1; i >= 0; i--){
+    const r = rockets[i];
+    r.x += r.vx;
+    r.y += r.vy;
+    r.vy += 0.18;
+
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, 2.3, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+
+    if (r.y <= r.targetY || r.life-- <= 0){
+      explode(r.x, r.y);
+      rockets.splice(i, 1);
+    }
+  }
+
+  for (let i = sparks.length - 1; i >= 0; i--){
+    const p = sparks[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.g;
+    p.vx *= p.drag;
+    p.vy *= p.drag;
+
+    const alpha = Math.max(0, p.life / 90);
+    ctx.globalAlpha = alpha;
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * 2.3, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,215,0,0.22)";
+    ctx.fill();
+
+    p.life--;
+    if (p.life <= 0 || p.y > H + 80 || p.x < -80 || p.x > W + 80){
+      sparks.splice(i, 1);
+    }
+  }
+
+  ctx.globalAlpha = 1;
+
+  if (active || rockets.length || sparks.length){
+    requestAnimationFrame(tick);
+  } else {
+    ctx.clearRect(0, 0, W, H);
+    animating = false;
+  }
+}
+</script>
+</body>
+</html>

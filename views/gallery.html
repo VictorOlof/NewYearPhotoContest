@@ -1,0 +1,257 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gallery</title>
+  <link rel="stylesheet" href="/public/style.css" />
+  <style>
+  /* existing confetti canvas, keep if you already have it */
+  #confetti{
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* Lightbox */
+  .lightbox{
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: none;
+    z-index: 9998;
+    padding: 14px;
+  }
+  .lightbox.open{
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+  }
+  .lbImg{
+    max-width: 100%;
+    max-height: 82vh;
+    object-fit: contain;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: 0 18px 70px rgba(0,0,0,0.6);
+  }
+  .lbCaption{
+    font-size: 18px;
+    font-weight: 800;
+    opacity: 0.95;
+    text-align: center;
+  }
+  .lbClose{
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    margin: 0;
+    padding: 0;
+    z-index: 9999;
+  }
+</style>
+
+</head>
+<body>
+  <div id="lightbox" class="lightbox" aria-hidden="true">
+  <button id="lbClose" class="lbClose" aria-label="Close">✕</button>
+  <img id="lbImg" class="lbImg" alt="">
+  <div id="lbCaption" class="lbCaption"></div>
+</div>
+
+
+  <canvas id="confetti"></canvas>
+
+  <main class="container">
+    <p id="votesLeft" style="font-weight:700; margin-top:8px;">
+  Votes left: …
+</p>
+
+    <p id="remaining"></p>
+
+    <div id="grid" class="grid"></div>
+  </main>
+
+<script>
+async function load() {
+  const res = await fetch("/api/submissions");
+  const items = await res.json();
+  const grid = document.getElementById("grid");
+
+  grid.innerHTML = items.map(i => {
+  const src = i.displayPath || i.imagePath;
+  return `
+    <div class="card">
+      <img src="${src}" alt="" onclick="openLightbox('${src}', '${escapeHtml(i.name)}')">
+      <div class="meta">
+        <strong>${escapeHtml(i.name)}</strong>
+        <button onclick="vote(event, ${i.id})">Vote</button>
+      </div>
+    </div>
+  `;
+}).join("");
+
+
+}
+
+const lightbox = document.getElementById("lightbox");
+const lbImg = document.getElementById("lbImg");
+const lbCaption = document.getElementById("lbCaption");
+const lbClose = document.getElementById("lbClose");
+
+function openLightbox(src, name) {
+  lbImg.src = src;
+  lbCaption.textContent = name || "";
+  lightbox.classList.add("open");
+  lightbox.setAttribute("aria-hidden", "false");
+
+  // prevent background scroll on mobile
+  document.body.style.overflow = "hidden";
+}
+
+function closeLightbox() {
+  lightbox.classList.remove("open");
+  lightbox.setAttribute("aria-hidden", "true");
+  lbImg.src = "";
+  document.body.style.overflow = "";
+}
+
+// close handlers
+lbClose.addEventListener("click", closeLightbox);
+lightbox.addEventListener("click", (e) => {
+  // clicking outside the image closes
+  if (e.target === lightbox) closeLightbox();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeLightbox();
+});
+
+
+
+
+async function updateVotesLeft() {
+  const res = await fetch("/api/votes-remaining");
+  const data = await res.json();
+
+  const el = document.getElementById("votesLeft");
+  el.textContent = `Votes left: ${data.votesRemaining} / 3`;
+
+  if (data.votesRemaining === 0) {
+    el.textContent += " — no more votes 🎉";
+    document.querySelectorAll("button").forEach(b => b.disabled = true);
+  }
+}
+
+
+async function vote(ev, id) {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/vote/" + id, { method: "POST" });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert(data.error || "Vote failed");
+      return;
+    }
+
+
+    // 🎉 Confetti burst from the button location
+    const rect = btn.getBoundingClientRect();
+    burstConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  } finally {
+    // re-enable unless you want to keep disabled after vote
+    btn.disabled = false;
+
+    updateVotesLeft();
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ---------------- Confetti (lightweight) ---------------- */
+const confettiCanvas = document.getElementById("confetti");
+const ctx = confettiCanvas.getContext("2d");
+let W, H;
+let pieces = [];
+let animating = false;
+
+function resize() {
+  W = confettiCanvas.width = window.innerWidth;
+  H = confettiCanvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+function burstConfetti(x, y) {
+  // create some pieces
+  for (let i = 0; i < 120; i++) {
+    pieces.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 10,
+      vy: (Math.random() - 0.9) * 10,
+      g: 0.25 + Math.random() * 0.2,
+      s: 4 + Math.random() * 6,
+      r: Math.random() * Math.PI * 2,
+      vr: (Math.random() - 0.5) * 0.25,
+      life: 70 + Math.floor(Math.random() * 30)
+    });
+  }
+  if (!animating) {
+    animating = true;
+    requestAnimationFrame(tick);
+  }
+}
+
+function tick() {
+  ctx.clearRect(0, 0, W, H);
+
+  // draw
+  for (const p of pieces) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.r);
+    ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s);
+    ctx.restore();
+  }
+
+  // update
+  pieces = pieces.filter(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.g;
+    p.r += p.vr;
+    p.vx *= 0.98;
+    p.vy *= 0.98;
+    p.life -= 1;
+    return p.life > 0 && p.y < H + 50;
+  });
+
+  if (pieces.length > 0) {
+    requestAnimationFrame(tick);
+  } else {
+    animating = false;
+    ctx.clearRect(0, 0, W, H);
+  }
+}
+
+load();
+updateVotesLeft();
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Reveal Mode</title>
+  <link rel="stylesheet" href="/public/reveal.css" />
+</head>
+<body>
+  <canvas id="confetti"></canvas>
+
+  <div class="wrap">
+    <header class="header">
+      <div class="title">🎆 New Year Photo Challenge</div>
+      <div class="subtitle">Reveal Mode • Press <b>Space</b> or click <b>Next</b></div>
+      <div id="status" class="status">Loading…</div>
+    </header>
+
+    <main class="stage">
+      <section id="panel" class="panel"></section>
+
+      <div class="controls">
+        <button id="lockBtn">Lock voting</button>
+        <button id="unlockBtn">Unlock voting</button>
+        <button id="nextBtn" class="primary">Next</button>
+        <button id="resetBtn">Reset reveal</button>
+      </div>
+
+      <div class="hint">
+        Tip: open this on your TV browser at <code>/reveal</code>. Cast/mirror your laptop if needed.
+      </div>
+    </main>
+  </div>
+
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get("key") || "newyear"; // same as server default unless you changed it
+
+let stats = null;
+let step = 0;
+
+const panel = document.getElementById("panel");
+const statusEl = document.getElementById("status");
+const nextBtn = document.getElementById("nextBtn");
+const lockBtn = document.getElementById("lockBtn");
+const resetBtn = document.getElementById("resetBtn");
+
+function fmt(n) { return (n ?? 0).toString(); }
+
+async function fetchStats() {
+  const s = await fetch("/api/status").then(r => r.json());
+  const st = await fetch("/api/stats").then(r => r.json());
+  stats = st;
+  statusEl.textContent = `Photos: ${st.count} • Total votes: ${st.totalVotes} • Voting locked: ${s.votingLocked ? "YES" : "NO"}`;
+}
+
+async function lockVoting() {
+  const res = await fetch(`/api/admin/lock?key=${encodeURIComponent(ADMIN_KEY)}`, { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || "Failed to lock voting");
+  await fetchStats();
+}
+
+const unlockBtn = document.getElementById("unlockBtn");
+
+async function unlockVoting() {
+  const res = await fetch(`/api/admin/unlock?key=${encodeURIComponent(ADMIN_KEY)}`, { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || "Failed to unlock voting");
+  await fetchStats();
+}
+
+unlockBtn.addEventListener("click", unlockVoting);
+
+
+function cardPhoto(item, badgeText) {
+  if (!item) return `<div class="card">No data</div>`;
+  return `
+    <div class="card">
+      <div class="badge">${badgeText}</div>
+      <div class="grid">
+        <div class="imgWrap">
+          <img src="${item.imagePath}" alt="">
+        </div>
+        <div class="info">
+          <div class="name">${escapeHtml(item.name)}</div>
+          <div class="votes">Votes: <span class="votesNum">${fmt(item.votes)}</span></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function render() {
+  if (!stats) return;
+
+  const { top3, winner, runnerUp, margin, tightest, darkHorse, lateEntryHero } = stats;
+
+  const steps = [
+    () => `
+      <div class="big">🎉 Voting is closed…</div>
+      <div class="big2">Let’s reveal the results!</div>
+      <div class="small">Next: Top 3</div>
+    `,
+    () => `
+      <div class="big2">🥉 3rd Place</div>
+      ${cardPhoto(top3[2], "3rd")}
+    `,
+    () => `
+      <div class="big2">🥈 2nd Place</div>
+      ${cardPhoto(top3[1], "2nd")}
+    `,
+    () => `
+      <div class="big2">🥇 WINNER</div>
+      ${cardPhoto(top3[0], "WINNER")}
+      <div class="small">${runnerUp ? `Winning margin: <b>${fmt(margin)}</b> vote(s)` : ""}</div>
+    `,
+    () => `
+      <div class="big2">🔥 Tightest Battle</div>
+      ${tightest ? `
+        <div class="small">Closest gap in the leaderboard: <b>${fmt(tightest.gap)}</b> vote(s) between #${tightest.indexA} and #${tightest.indexB}</div>
+        <div class="twoCol">
+          ${cardPhoto(tightest.a, `#${tightest.indexA}`)}
+          ${cardPhoto(tightest.b, `#${tightest.indexB}`)}
+        </div>
+      ` : `<div class="small">Not enough data.</div>`}
+    `,
+    () => `
+      <div class="big2">🦄 Dark Horse</div>
+      <div class="small">Top photo from the bottom half of the table</div>
+      ${cardPhoto(darkHorse, "DARK HORSE")}
+    `,
+    () => `
+      <div class="big2">⏰ Late Entry Hero</div>
+      <div class="small">Best performer among the last 5 uploads</div>
+      ${cardPhoto(lateEntryHero, "LATE HERO")}
+    `,
+    () => {
+      // confetti on final slide
+      launchConfetti();
+      return `
+        <div class="big">🎆 Happy New Year!</div>
+        <div class="big2">Thanks for playing!</div>
+        <div class="small">You can refresh or hit “Reset reveal” to replay.</div>
+      `;
+    }
+  ];
+
+  const fn = steps[Math.min(step, steps.length - 1)];
+  panel.innerHTML = fn();
+}
+
+function next() {
+  step++;
+  render();
+}
+
+function reset() {
+  step = 0;
+  render();
+}
+
+// Controls
+nextBtn.addEventListener("click", next);
+lockBtn.addEventListener("click", lockVoting);
+resetBtn.addEventListener("click", reset);
+
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "Enter" || e.code === "ArrowRight") next();
+  if (e.code === "ArrowLeft") { step = Math.max(0, step - 1); render(); }
+  if (e.code === "KeyR") reset();
+});
+
+// Init
+(async function init() {
+  await fetchStats();
+  render();
+})();
+
+// Simple confetti (lightweight)
+const canvas = document.getElementById("confetti");
+const ctx = canvas.getContext("2d");
+let confetti = [];
+let confettiOn = false;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+function launchConfetti() {
+  confettiOn = true;
+  confetti = Array.from({ length: 250 }).map(() => ({
+    x: Math.random() * canvas.width,
+    y: -20 - Math.random() * 200,
+    r: 4 + Math.random() * 6,
+    vx: -2 + Math.random() * 4,
+    vy: 2 + Math.random() * 5,
+    rot: Math.random() * Math.PI,
+    vr: -0.2 + Math.random() * 0.4
+  }));
+  requestAnimationFrame(tick);
+  setTimeout(() => confettiOn = false, 6000);
+}
+
+function tick() {
+  ctx.clearRect(0,0,canvas.width, canvas.height);
+  if (confettiOn) {
+    for (const p of confetti) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rot += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillRect(-p.r/2, -p.r/2, p.r, p.r);
+      ctx.restore();
+    }
+    confetti = confetti.filter(p => p.y < canvas.height + 50);
+    requestAnimationFrame(tick);
+  } else {
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+  }
+}
+</script>
+</body>
+</html>
